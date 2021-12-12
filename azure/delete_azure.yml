@@ -1,0 +1,10 @@
+- hosts: localhost
+  tasks:
+    - name: Deleting resource group
+      azure_rm_resourcegroup:
+        name: rg-cs-ansible
+        state: absent
+        force_delete_nonempty: yes
+      register: rg
+    - debug:
+        var: rg

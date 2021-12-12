@@ -1,0 +1,8 @@
+- hosts: localhost
+  tasks:
+    - name: delete resource group
+      azure_rm_resourcegroup:
+        name: azure-ansible-rg
+        location: northeurope
+        state: absent
+        force_delete_nonempty: True

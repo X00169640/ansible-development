@@ -1,0 +1,319 @@
+---
+- hosts: localhost
+  connection: local
+  vars:
+    resource_group: azure-ansible-rg
+    default_location: northeurope
+    web_username: diarmaid
+    web_os_user_pwd: {}
+    db_user_pwd: {}
+    web_subnets:
+      - name: northeurope
+        cidr: "192.168.1.0/24"
+      - name: northeurope
+        cidr: "192.168.2.0/24"
+      - name: northeurope
+        cidr: "192.168.3.0/24"
+    app_subnets:
+      - name: northeurope
+        cidr: "192.168.10.0/24"
+      - name: northeurope
+        cidr: "192.168.11.0/24"
+      - name: northeurope
+        cidr: "192.168.12.0/24"
+    database_subnets:
+      - name: northeurope
+        cidr: "192.168.100.0/24"
+      - name: northeurope
+        cidr: "192.168.101.0/24"
+      - name: northeurope
+        cidr: "192.168.102.0/24"
+  tasks:
+    - name: Create resource group
+      azure_rm_resourcegroup:
+        name: "{{ resource_group }}"
+        location: "{{ default_location }}"
+
+    - name: create virtual network
+      azure_rm_virtualnetwork:
+        resource_group: "{{ resource_group }}"
+        name: azure-ansible-vnet
+        address_prefixes_cidr: "192.168.0.0/16"
+
+    - name: add web subnets
+      azure_rm_subnet:
+        resource_group: "{{ resource_group }}"
+        name: "azure-ansible-web-subnet-{{ ansible_loop.index }}"
+        address_prefix: "{{ item.cidr }}"
+        virtual_network: azure-ansible-vnet
+      loop:
+        - "{{ web_subnets }}"
+      register: web_subnet_create
+
+    - name: add app subnets
+      azure_rm_subnet:
+        resource_group: "{{ resource_group }}"
+        name: "azure-ansible-app-subnet-{{ ansible_loop.index }}"
+        address_prefix: "{{ item.cidr }}"
+        virtual_network: azure-ansible-vnet
+      loop:
+        - "{{ app_subnets }}"
+      register: app_subnet_create
+
+    - name: add db subnets
+      azure_rm_subnet:
+        resource_group: "{{ resource_group }}"
+        name: "azure-ansible-db-subnet-{{ ansible_loop.index }}"
+        address_prefix: "{{ item.cidr }}"
+        virtual_network: azure-ansible-vnet
+      loop:
+        - "{{ db_subnets }}"
+      register: database_subnet_create
+
+    - name: create web security group
+      azure_rm_securitygroup:
+        resource_group: "{{ resource_group }}"
+        name: webnetworksg
+        rules:
+            - name: InboundSSH
+              protocol: Tcp
+              destination_port_range: 22
+              destination_address_prefix: '*'
+              access: Allow
+              priority: 101
+              direction: Inbound
+              source_address_prefix: '*'
+              source_port_range: '*'
+              
+            - name: 'DenySSH'
+              protocol: Tcp
+              source_address_prefix:
+                - '192.168.3.0/24'
+              destination_port_range: 22
+              access: Deny
+              priority: 100
+              direction: Inbound
+
+    - name: create app security group
+      azure_rm_securitygroup:
+        resource_group: "{{ resource_group }}"
+        name: appnetworksg
+        rules:
+            - name: InboundSSH
+              protocol: Tcp
+              destination_port_range: 22
+              destination_address_prefix: '*'
+              access: Allow
+              priority: 100
+              direction: Inbound
+              source_address_prefix:
+                - '192.168.1.0/24'
+              source_port_range: '*'
+              
+            - name: 'OutboundSSH'
+              protocol: Tcp
+              source_address_prefix: "192.168.1.0/24"
+              source_port_range: '*'
+              destination_port_range: 22
+              destination_address_prefix: '*'
+              access: Allow
+              priority: 101
+              direction: Outbound
+
+    - name: create db security group
+      azure_rm_securitygroup:
+        resource_group: "{{ resource_group }}"
+        name: dbnetworksg
+        rules:
+            - name: AllowedInboundConnections
+              protocol: Tcp
+              destination_port_range: 3306
+              destination_address_prefix: '*'
+              access: Allow
+              priority: 101
+              direction: Inbound
+              source_address_prefix: "192.168.2.0/24"
+              source_port_range: '*'
+              
+            - name: 'AllowedOutboundConnections'
+              protocol: Tcp
+              source_address_prefix: "192.168.2.0/24"
+              source_port_range: '*'
+              destination_port_range: 3306
+              destination_address_prefix: '*'
+              access: Allow
+              priority: 102
+              direction: Outbound
+
+            - name: 'DeniedOutboundConnections'
+              protocol: Tcp
+              source_address_prefix: "192.168.1.0/24"
+              source_port_range: '*'
+              destination_port_range: 3306
+              destination_address_prefix: '*'
+              access: Deny
+              priority: 100
+              direction: Outbound
+
+    - name: add web subnet sg assoc
+      azure_rm_subnet:
+        security_group: webnetworksg
+        resource_group: "{{ resource_group }}"
+        name: "azure-ansible-web-subnet-{{ ansible_loop.index }}"
+        address_prefix: "{{ item.cidr }}"
+        virtual_network: azure-ansible-vnet
+      loop:
+        - "{{ web_subnets }}"
+      register: web_subnet_create
+
+    - name: add app subnet sg assoc
+      azure_rm_subnet:
+        security_group: appnetworksg
+        resource_group: "{{ resource_group }}"
+        name: "azure-ansible-app-subnet-{{ ansible_loop.index }}"
+        address_prefix: "{{ item.cidr }}"
+        virtual_network: azure-ansible-vnet
+      loop:
+        - "{{ app_subnets }}"
+      register: app_subnet_create
+
+    - name: add db subnet sg assoc
+      azure_rm_subnet:
+        security_group: dbnetworksg
+        resource_group: "{{ resource_group }}"
+        name: "azure-ansible-db-subnet-{{ ansible_loop.index }}"
+        address_prefix: "{{ item.cidr }}"
+        virtual_network: azure-ansible-vnet
+      loop:
+        - "{{ database_subnets }}"
+      register: database_subnet_create
+
+    #### compute
+    - name: Create web availability set 
+      azure_rm_availabilityset:
+        name: web-availability-set
+        location: "{{ default_location }}"
+        resource_group: "{{ resource_group }}"
+        sku: Aligned
+
+    - name: Create web public IP address
+      azure_rm_publicipaddress:
+        resource_group: "{{ resource_group }}"
+        allocation_method: Static
+        name: web-public-ip
+      register: web_public_ip
+
+    - name: Create web network interface 
+      azure_rm_networkinterface:
+        name: "web-network-interface-{{ web_subnets[0].name }}"
+        resource_group: "{{ resource_group }}"
+        virtual_network: azure-ansible-vnet
+        security_group: webnetworksg
+        subnet_name: "azure-ansible-web-subnet-{{ web_subnets[0].name }}"
+        ip_configurations:
+          - name: web-webserver
+            private_ip_allocation_method: Dynamic
+          - name: public-webserver-ip
+            public_ip_address_name: azure-devops-ansible-webapp
+            primary: True
+      register: web_nic
+
+    - name: Create web VM 
+      azure_rm_virtualmachine:
+        resource_group: "{{ resource_group }}"
+        name: web-vm
+        admin_username: diarmaid
+        vm_size: "Standard_D2s_v3"
+        availability_set: web-availability-set
+        network_interface_names: 
+          - web-network-interface
+        os_disk_name: web-disk
+        os_disk_caching: ReadWrite
+        managed_disk_type: Standard_LRS
+        ssh_password_enabled: false
+        ssh_public_keys:
+          - path: "/home/diarmaid/.ssh/authorized_keys"
+            key_data: "{{ lookup('file', '~/.ssh/id_rsa.pub') }}"
+        short_hostname: web-vm
+        image:
+          offer: UbuntuServer
+          publisher: "Canonical"
+          sku: "18.04-LTS"
+          version: latest
+      register: web_vm
+
+    - name: Create app availability set 
+      azure_rm_availabilityset:
+        name: app-availability-set
+        location: "{{ default_location }}"
+        resource_group: "{{ resource_group }}"
+        sku: Aligned
+
+    - name: Create app network interface 
+      azure_rm_networkinterface:
+        name: app-network-interface
+        resource_group: "{{ resource_group }}"
+        virtual_network: azure-ansible-vnet
+        subnet_name: "azure-ansible-app-subnet-{{ app_subnet.name }}"
+        ip_configurations:
+          - name: app-webserver
+            private_ip_allocation_method: Dynamic
+
+    - name: Create app VM
+      azure_rm_virtualmachine:
+        resource_group: "{{ resource_group }}"
+        name: app-vm
+        admin_username: "{{ web_username }}"
+        admin_password: "{{ web_os_user_pwd }}"
+        vm_size: "Standard_D2s_v3"
+        availability_set: app-availability-set
+        network_interface_names: 
+          - app-network-interface
+        os_disk_name: app-disk
+        os_disk_caching: ReadWrite
+        managed_disk_type: Standard_LRS
+        short_hostname: app-vm
+        image:
+          offer: UbuntuServer
+          publisher: "Canonical"
+          sku: "18.04-LTS"
+          version: latest
+
+    ### database
+
+    - name: Create SQL Server
+      azure_rm_sqlserver:
+        resource_group: "{{ resource_group }}"
+        name: devops-test-sql-db-server
+        admin_username: "{{ web_username }}"
+        admin_password: "{{ db_user_pwd }}"
+        version: '12.0'
+
+    - name: Create SQL Database
+      azure_rm_sqldatabase:
+        resource_group: "{{ resource_group }}"
+        server_name: devops-test-sql-db-server
+        name: db
+
+    - name: grab host ip
+      set_fact:
+        new_vm_ip: "{{ web_vm.ansible_facts.azure_vm.properties.networkProfile.networkInterfaces.0.properties.ipConfigurations.1.properties.publicIPAddress.properties.ipAddress }}"
+
+    - name: Add host to group just_created
+      add_host:
+        name: "{{ new_vm_ip }}"
+        groups: new_web_server
+
+
+- hosts: new_web_server
+  gather_facts: no 
+  tasks:
+    - name: install httpd
+      package:
+        name: httpd
+        state: present
+
+    - name: start httpd service 
+      service:
+        name: httpd
+        state: started
